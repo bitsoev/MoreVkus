@@ -1,0 +1,13 @@
+# Django
+*.sqlite3
+*.pyc
+__pycache__/
+media/
+venv/
+.env
+
+# PostgreSQL
+*.pid
+*.dump
+pgdata/
+
