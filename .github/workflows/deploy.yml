@@ -20,9 +20,9 @@ jobs:
 
       - name: Rsync to server
         run: |
-          rsync -avz --delete ./ ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:~/fish_store/mysite/
+          rsync -avz --delete ./ ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:~/MoreVkus
 
       # если нужен рестарт сервиса/приложения — добавь команду ниже
       - name: Restart app (optional)
         run: |
-          ssh ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} 'cd ~/fish_store/mysite && ./restart.sh || true'
+          ssh ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} 'cd ~/MoreVkus && ./restart.sh || true'
