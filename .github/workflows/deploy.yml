@@ -21,14 +21,14 @@ jobs:
       - name: Ensure remote dir exists
         run: ssh ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} 'mkdir -p ~/MoreVkus'
 
-      - name: Rsync to server (keep .env and venv)
+      - name: Rsync to server (protect .env and venv)
         run: |
           rsync -az --delete \
-            --exclude='.env' \
-            --exclude='.env.*' \
-            --exclude='venv/' \
-            --exclude='.venv/' \
-            --exclude='env/' \
+            --filter='protect .env' \
+            --filter='protect .env.*' \
+            --filter='protect venv/' \
+            --filter='protect .venv/' \
+            --filter='protect env/' \
             --exclude='__pycache__/' \
             --exclude='.git/' \
             --exclude='.github/' \
