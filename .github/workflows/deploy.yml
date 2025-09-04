@@ -16,13 +16,25 @@ jobs:
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_KEY }}" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
-          printf "Host *\n\tStrictHostKeyChecking no\n" > ~/.ssh/config
+          printf "Host *\n\tStrictHostKeyChecking no\n\tIdentityFile ~/.ssh/id_ed25519\n" > ~/.ssh/config
 
-      - name: Rsync to server
+      - name: Ensure remote dir exists
+        run: ssh ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} 'mkdir -p ~/MoreVkus'
+
+      - name: Rsync to server (keep .env and venv)
         run: |
-          rsync -avz --delete ./ ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:~/MoreVkus
+          rsync -az --delete \
+            --exclude='.env' \
+            --exclude='.env.*' \
+            --exclude='venv/' \
+            --exclude='.venv/' \
+            --exclude='env/' \
+            --exclude='__pycache__/' \
+            --exclude='.git/' \
+            --exclude='.github/' \
+            --exclude='*.pyc' \
+            ./ ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:~/MoreVkus
 
-      # если нужен рестарт сервиса/приложения — добавь команду ниже
       - name: Restart app (optional)
         run: |
           ssh ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} 'cd ~/MoreVkus && ./restart.sh || true'
