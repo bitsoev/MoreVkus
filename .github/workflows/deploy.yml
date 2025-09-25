@@ -1,4 +1,4 @@
-name: Deploy to YC VM (rsync)
+name: Deploy to YC VM (rsync + remote tasks)
 
 on:
   push:
@@ -7,19 +7,27 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    env:
+      REMOTE_DIR: ~/MoreVkus
+      # Опционально: домен для проверки здоровья (оставь пустым для проверки по IP)
+      DOMAIN: ${{ secrets.DOMAIN }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup SSH
+      - name: Setup SSH key
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_KEY }}" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
-          printf "Host *\n\tStrictHostKeyChecking no\n\tIdentityFile ~/.ssh/id_ed25519\n" > ~/.ssh/config
+          # add host key to known_hosts to avoid prompt (optional but safer)
+          ssh-keyscan -H ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts
+          printf "Host remote-server\n    HostName %s\n    User %s\n    IdentityFile ~/.ssh/id_ed25519\n    StrictHostKeyChecking no\n" "${{ secrets.SSH_HOST }}" "${{ secrets.SSH_USER }}" > ~/.ssh/config
+          chmod 600 ~/.ssh/config
 
       - name: Ensure remote dir exists
-        run: ssh ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} 'mkdir -p ~/MoreVkus'
+        run: |
+          ssh -o StrictHostKeyChecking=no ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} "mkdir -p $REMOTE_DIR"
 
       - name: Rsync to server (protect .env and venv)
         run: |
@@ -33,8 +41,47 @@ jobs:
             --exclude='.git/' \
             --exclude='.github/' \
             --exclude='*.pyc' \
-            ./ ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:~/MoreVkus
+            -e "ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=no" \
+            ./ "${{ secrets.SSH_USER }}"@"${{ secrets.SSH_HOST }}":$REMOTE_DIR
 
-      - name: Restart app (optional)
+      - name: Remote deploy tasks (migrate, collectstatic, restart)
         run: |
-          ssh ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} 'cd ~/MoreVkus && ./restart.sh || true'
+          ssh -o StrictHostKeyChecking=no ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} bash -s <<'REMOTE_EOF'
+            set -euo pipefail
+            cd $HOME/MoreVkus
+
+            # activate venv if exists
+            if [ -f ./venv/bin/activate ]; then
+              . ./venv/bin/activate
+            fi
+
+            # Optional: install new/changed python deps (uncomment if you want)
+            if [ -f requirements.txt ]; then
+              pip install -r requirements.txt
+            fi
+
+            # Run migrations and collectstatic (noinput for non-interactive)
+            python manage.py migrate --noinput
+            python manage.py collectstatic --noinput
+
+            # Restart gunicorn (systemd unit 'django') and reload nginx
+            # NOTE: ensure your ssh user has passwordless sudo for these commands
+            sudo systemctl restart django
+            sudo systemctl reload nginx
+
+            # Give services a second to warm up
+            sleep 2
+
+            # Simple health check: try HEAD on domain or on localhost
+            if [ -n "${DOMAIN:-}" ]; then
+              curl -I -m 10 -fsS "https://${DOMAIN}" || (echo "Health check failed" && exit 1)
+            else
+              # If DOMAIN not provided, check nginx on localhost (may require nginx listening on 127.0.0.1)
+              curl -I -m 10 -fsS http://127.0.0.1/ || echo "Local check failed (but deploy continued)"
+            fi
+
+            echo "DEPLOY OK"
+REMOTE_EOF
+
+      - name: Done
+        run: echo "Deploy job finished"
