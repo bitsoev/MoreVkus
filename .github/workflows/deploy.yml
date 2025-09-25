@@ -49,39 +49,25 @@ jobs:
           ssh -o StrictHostKeyChecking=no ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} bash -s <<'REMOTE_EOF'
             set -euo pipefail
             cd $HOME/MoreVkus
-
-            # activate venv if exists
             if [ -f ./venv/bin/activate ]; then
               . ./venv/bin/activate
             fi
-
-            # Optional: install new/changed python deps (uncomment if you want)
             if [ -f requirements.txt ]; then
               pip install -r requirements.txt
             fi
-
-            # Run migrations and collectstatic (noinput for non-interactive)
             python manage.py migrate --noinput
             python manage.py collectstatic --noinput
-
-            # Restart gunicorn (systemd unit 'django') and reload nginx
-            # NOTE: ensure your ssh user has passwordless sudo for these commands
             sudo systemctl restart django
             sudo systemctl reload nginx
-
-            # Give services a second to warm up
             sleep 2
-
-            # Simple health check: try HEAD on domain or on localhost
             if [ -n "${DOMAIN:-}" ]; then
               curl -I -m 10 -fsS "https://${DOMAIN}" || (echo "Health check failed" && exit 1)
             else
-              # If DOMAIN not provided, check nginx on localhost (may require nginx listening on 127.0.0.1)
               curl -I -m 10 -fsS http://127.0.0.1/ || echo "Local check failed (but deploy continued)"
             fi
-
             echo "DEPLOY OK"
-REMOTE_EOF
+          REMOTE_EOF
 
       - name: Done
         run: echo "Deploy job finished"
+
