@@ -165,3 +165,5 @@ IMPORT_EXPORT_IMPORT_PERMISSION = 'products.add_product'  # Права для и
 
 # Кодировка файлов (для корректного отображения кириллицы)
 IMPORT_EXPORT_ENCODING = 'utf-8-sig'   # UTF-8 с BOM для Excel
+
+STATIC_ROOT = os.path.join(BASE_DIR, "staticfiles")  # или любой другой каталог, куда будет собираться статика
