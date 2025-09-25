@@ -7,6 +7,8 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework import status, viewsets, generics, permissions
 
+from django.db.models import F
+
 from products.models import Product
 from orders.models import Orders
 from orders.models import OrderItems
@@ -95,8 +97,18 @@ class CreateOrderView(APIView):
 
             for item in items:
                 product = get_object_or_404(Product, id=item['product_id'])
-                price = product.price
                 quantity = item.get('quantity', 1)
+                price = product.price
+
+                # Проверка достаточности товара на складе
+                if product.stock < quantity:
+                    return Response(
+                        {'error': f'Недостаточно товара "{product.name}" на складе. Доступно: {product.stock}'},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+
+                # Уменьшение количества товара на складе
+                Product.objects.filter(id=product.id, stock__gte=quantity).update(stock=F('stock') - quantity)
 
                 OrderItems.objects.create(
                     order=order,
