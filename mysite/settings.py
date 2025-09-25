@@ -29,7 +29,7 @@ SECRET_KEY = 'django-insecure-ob%7onv(to$c_erb)$z@)y&dcm#&^8=l0napng7rx3kp)y51)^
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = ['51.250.123.92', 'localhost', '127.0.0.1']
+ALLOWED_HOSTS = ['51.250.123.92', 'localhost', '127.0.0.1', "morevkus.ru", "www.morevkus.ru"]
 
 
 
