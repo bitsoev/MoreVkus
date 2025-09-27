@@ -14,6 +14,7 @@ from orders.models import Orders
 from orders.models import OrderItems
 
 from .models import DeliveryAddress
+from .permissions import IsOwnerOrAdmin
 from .serializers import OrdersSerializer, OrderDetailSerializer
 
 
@@ -33,9 +34,15 @@ class OrderDetailView(generics.RetrieveAPIView):
         return Orders.objects.filter(user=self.request.user)
 
 
-class OrderViewSet(viewsets.ModelViewSet):
-    queryset = Orders.objects.all()
+class OrderViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = OrdersSerializer
+    permission_classes = [permissions.IsAuthenticated, IsOwnerOrAdmin]
+
+    def get_queryset(self):
+        user = self.request.user
+        if user.is_staff:  # админ видит все заказы
+            return Orders.objects.all()
+        return Orders.objects.filter(user=user)
 
 
 class CreateOrderView(APIView):
