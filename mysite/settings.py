@@ -36,6 +36,7 @@ ALLOWED_HOSTS = ['51.250.123.92', 'localhost', '127.0.0.1', 'morevkus.ru', 'www.
 # Application definition
 
 INSTALLED_APPS = [
+    'storages',
     'import_export',
     'products',
     'orders',
@@ -167,3 +168,24 @@ IMPORT_EXPORT_IMPORT_PERMISSION = 'products.add_product'  # Права для и
 IMPORT_EXPORT_ENCODING = 'utf-8-sig'   # UTF-8 с BOM для Excel
 
 STATIC_ROOT = os.path.join(BASE_DIR, "static")  # или любой другой каталог, куда будет собираться статика
+
+
+AWS_ACCESS_KEY_ID = os.environ.get("YANDEX_ACCESS_KEY_ID")
+AWS_SECRET_ACCESS_KEY = os.environ.get("YANDEX_SECRET")
+AWS_STORAGE_BUCKET_NAME = os.environ.get("YANDEX_BUCKET_NAME")
+
+# Обязательно endpoint Yandex
+AWS_S3_ENDPOINT_URL = "https://storage.yandexcloud.net"
+
+# Разные опции django-storages / boto3, полезные для совместимости
+AWS_S3_SIGNATURE_VERSION = "s3v4"          # подпись v4
+AWS_S3_ADDRESSING_STYLE = "path"           # -> https://storage.yandexcloud.net/<bucket>/<key>
+AWS_S3_REGION_NAME = None                  # можно указать регион при необходимости
+
+# Использовать S3Boto3Storage в качестве backend
+DEFAULT_FILE_STORAGE = "storages.backends.s3boto3.S3Boto3Storage"
+
+# Чтобы указывать глобальный Cache-Control при загрузке:
+AWS_S3_OBJECT_PARAMETERS = {
+    "CacheControl": "max-age=86400",  # 1 день — подберите под себя
+}

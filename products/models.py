@@ -34,8 +34,14 @@ class Product(models.Model):
 
 
 class ProductImage(models.Model):
-    product = models.ForeignKey('products.Product', on_delete=models.CASCADE, related_name='images')
-    image = models.ImageField(upload_to='product_images/')
+    product = models.ForeignKey(
+        'products.Product',
+        on_delete=models.CASCADE,
+        related_name='images'
+    )
+    image = models.ImageField(
+        upload_to='product_images/'
+    )  # при настройке storage → файл окажется в бакете
     alt_text = models.CharField(max_length=255, blank=True)
 
     def __str__(self):

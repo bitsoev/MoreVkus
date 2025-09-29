@@ -3,15 +3,14 @@ from .models import Product, Category, Tag, ProductImage
 
 
 class ProductImageSerializer(serializers.ModelSerializer):
+    image = serializers.SerializerMethodField()
+
     class Meta:
         model = ProductImage
-        fields = ['id', 'image', 'alt_text', 'product']
-        read_only_fields = ['product']
+        fields = ['id', 'image', 'alt_text']  # product убрал
 
-    def to_representation(self, instance):
-        representation = super().to_representation(instance)
-        representation['image'] = instance.image.url
-        return representation
+    def get_image(self, obj):
+        return obj.image.url
 
 
 class ProductSerializer(serializers.ModelSerializer):
@@ -25,7 +24,11 @@ class ProductSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Product
-        fields = ['id', 'name', 'description', 'price', 'weight', 'stock', 'category', 'category_id', 'tags', 'images']
+        fields = [
+            'id', 'name', 'description', 'price',
+            'weight', 'stock', 'category', 'category_id',
+            'tags', 'images'
+        ]
 
 
 class CategorySerializer(serializers.ModelSerializer):
