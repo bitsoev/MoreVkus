@@ -162,7 +162,6 @@ IMPORT_EXPORT_USE_TRANSACTIONS = True  # Использовать транзак
 IMPORT_EXPORT_SKIP_ADMIN_LOG = False   # Логировать действия в истории админки
 IMPORT_EXPORT_IMPORT_PERMISSION = 'products.add_product'  # Права для импорта
 
-
 # Кодировка файлов (для корректного отображения кириллицы)
 IMPORT_EXPORT_ENCODING = 'utf-8-sig'   # UTF-8 с BOM для Excel
 
