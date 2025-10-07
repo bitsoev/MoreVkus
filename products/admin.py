@@ -94,11 +94,14 @@ class ProductResource(resources.ModelResource):
         if raw_unit and not Unit.objects.filter(code=raw_unit).exists():
             Unit.objects.get_or_create(code=raw_unit, defaults={'name': raw_unit})
 
-    def after_save_instance(self, instance, using_transactions, dry_run, **kwargs):
-        """Создаёт/обновляет Stock на основном складе после импорта."""
+    def after_save_instance(self, instance, **kwargs):
+        """
+        После сохранения Product создаем/обновляем Stock на основном складе.
+        Ожидается колонка 'Количество' в Excel.
+        """
         from products.models import Warehouse, Stock
 
-        row = kwargs.get('row', None)
+        row = kwargs.get('row')
         if not row:
             try:
                 row = self.get_row_from_instance(instance)
