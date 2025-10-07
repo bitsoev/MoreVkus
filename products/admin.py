@@ -124,8 +124,8 @@ class ProductResource(resources.ModelResource):
             defaults={'quantity': quantity}
         )
 
-
 # -------------------- Product Admin --------------------
+
 
 @admin.register(Product)
 class ProductAdmin(ImportExportModelAdmin):
