@@ -94,7 +94,7 @@ class ProductResource(resources.ModelResource):
         if raw_unit and not Unit.objects.filter(code=raw_unit).exists():
             Unit.objects.get_or_create(code=raw_unit, defaults={'name': raw_unit})
 
-    def after_save_instance(self, instance, **kwargs):
+    def after_save_instance(self, instance, new, **kwargs):
         """
         После сохранения Product создаем/обновляем Stock на основном складе.
         Ожидается колонка 'Количество' в Excel.
