@@ -80,39 +80,38 @@ class ProductResource(resources.ModelResource):
         return ', '.join(tag.name for tag in product.tags.all())
 
     def before_import_row(self, row, **kwargs):
-        # Категория
         raw_cat = row.get('Категория') or ''
         if raw_cat and not Category.objects.filter(name=raw_cat).exists():
             Category.objects.get_or_create(name=raw_cat, defaults={'slug': slugify(raw_cat)})
 
-        # Теги
         raw_tags = row.get('Теги') or ''
         if raw_tags:
             tag_names = [t.strip() for t in raw_tags.split(',') if t.strip()]
             for name in tag_names:
-                if not Tag.objects.filter(name=name).exists():
-                    Tag.objects.get_or_create(name=name, defaults={'slug': slugify(name)})
+                Tag.objects.get_or_create(name=name, defaults={'slug': slugify(name)})
 
-        # Единица
         raw_unit = row.get('Единица') or ''
         if raw_unit and not Unit.objects.filter(code=raw_unit).exists():
             Unit.objects.get_or_create(code=raw_unit, defaults={'name': raw_unit})
 
-    def after_save_instance(self, instance, using_transactions, dry_run):
-        """
-        После сохранения Product создаем/обновляем Stock на основном складе.
-        Ожидается колонка 'Количество' в Excel.
-        """
+    def after_save_instance(self, instance, using_transactions, dry_run, **kwargs):
+        """Создаёт/обновляет Stock на основном складе после импорта."""
         from products.models import Warehouse, Stock
 
-        row = self.get_row_from_instance(instance)
+        row = kwargs.get('row', None)
+        if not row:
+            try:
+                row = self.get_row_from_instance(instance)
+            except Exception:
+                return
+
         quantity = row.get('Количество')
-        if quantity is None:
+        if not quantity:
             return
 
         try:
             quantity = int(quantity)
-        except ValueError:
+        except (ValueError, TypeError):
             return
 
         warehouse, _ = Warehouse.objects.get_or_create(name='Основной склад')
