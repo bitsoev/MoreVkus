@@ -119,7 +119,6 @@ class ProductResource(resources.ModelResource):
 
 
 # -------------------- Product Admin --------------------
-
 @admin.register(Product)
 class ProductAdmin(ImportExportModelAdmin):
     resource_class = ProductResource
