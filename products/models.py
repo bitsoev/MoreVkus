@@ -1,5 +1,6 @@
 import uuid
 
+from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils import timezone
 
@@ -41,11 +42,7 @@ class Product(models.Model):
     tags = models.ManyToManyField('products.Tag', blank=True)
 
     sku = models.CharField(max_length=50, unique=True, default=uuid.uuid4)
-    price = models.DecimalField(max_digits=10, decimal_places=2)
-    discount_price = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
 
-    weight = models.PositiveIntegerField(help_text="в граммах")
-    #unit = models.ForeignKey('products.Unit', on_delete=models.SET_NULL, null=True, blank=True)
     unit = models.ForeignKey('products.Unit', on_delete=models.PROTECT, default=1)
 
     # Кеш общего остатка (для быстрого фронта)
@@ -91,6 +88,7 @@ class Stock(models.Model):
     product = models.ForeignKey('products.Product', on_delete=models.CASCADE, related_name='stocks')
     warehouse = models.ForeignKey('products.Warehouse', on_delete=models.CASCADE, related_name='stocks')
     quantity = models.IntegerField(default=0)
+    unit = models.ForeignKey('products.Unit', on_delete=models.PROTECT, default=1)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
@@ -101,21 +99,105 @@ class Stock(models.Model):
 
 
 class PriceType(models.Model):
-    name = models.CharField(max_length=255)
-    ms_uuid = models.CharField(max_length=36, unique=True, null=True, blank=True)
+    """Тип цены — розничная, оптовая, акционная и т.д."""
+    name = models.CharField(max_length=50, unique=True, verbose_name='Тип цены')
+    ms_uuid = models.SlugField(max_length=50, unique=True, verbose_name='Код')
+    description = models.TextField(blank=True, verbose_name='Описание')
+
+    class Meta:
+        verbose_name = 'Тип цены'
+        verbose_name_plural = 'Типы цен'
 
     def __str__(self):
         return self.name
 
 
 class Price(models.Model):
-    product = models.ForeignKey('products.Product', on_delete=models.CASCADE, related_name='prices')
-    price_type = models.ForeignKey('products.PriceType', on_delete=models.CASCADE, related_name='prices')
-    value = models.DecimalField(max_digits=10, decimal_places=2)
+    """Модель для хранения истории и типов цен товара"""
+
+    product = models.ForeignKey(
+        'products.Product',
+        on_delete=models.CASCADE,
+        related_name='prices',
+        verbose_name='Товар'
+    )
+
+    price_type = models.ForeignKey(
+        'products.PriceType',
+        on_delete=models.CASCADE,
+        related_name='prices',
+        verbose_name='Тип цены'
+    )
+
+    value = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        verbose_name='Цена'
+    )
+
+    start_date = models.DateTimeField(
+        default=timezone.now,
+        verbose_name='Дата начала действия'
+    )
+
+    end_date = models.DateTimeField(
+        null=True,
+        blank=True,
+        verbose_name='Дата окончания действия'
+    )
+
+    is_active = models.BooleanField(
+        default=True,
+        verbose_name='Активна'
+    )
+
+    priority = models.PositiveSmallIntegerField(
+        default=0,
+        help_text='Чем выше значение, тем приоритетнее цена при пересечении периодов.'
+    )
+
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        unique_together = ('product', 'price_type')
+        verbose_name = 'Цена'
+        verbose_name_plural = 'Цены'
+        ordering = ['-priority', '-start_date']
+        indexes = [
+            models.Index(fields=['product', 'price_type']),
+            models.Index(fields=['is_active']),
+        ]
 
     def __str__(self):
-        return f"{self.product.name} - {self.price_type.name}: {self.value}"
+        return f"{self.product.name} — {self.price_type.name}: {self.value} ₽"
+
+    def clean(self):
+        if self.end_date and self.end_date <= self.start_date:
+            raise ValidationError("Дата окончания должна быть позже даты начала.")
+        if self.value <= 0:
+            raise ValidationError("Цена должна быть больше нуля.")
+
+    def is_current(self):
+        """Проверяет, активна ли цена на текущую дату"""
+        now = timezone.now()
+        return (
+            self.is_active
+            and self.start_date <= now
+            and (self.end_date is None or self.end_date >= now)
+        )
+
+    @classmethod
+    def get_current_price(cls, product, price_type=None):
+        """Возвращает актуальную цену для товара (учитывает приоритет, даты и тип цены)"""
+        now = timezone.now()
+        qs = cls.objects.filter(
+            product=product,
+            is_active=True,
+            start_date__lte=now
+        ).filter(
+            models.Q(end_date__isnull=True) | models.Q(end_date__gte=now)
+        )
+
+        if price_type:
+            qs = qs.filter(price_type=price_type)
+
+        return qs.order_by('-priority', '-start_date').first()
