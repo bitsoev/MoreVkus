@@ -99,9 +99,9 @@ class Stock(models.Model):
 
 
 class PriceType(models.Model):
-    """Тип цены — розничная, оптовая, акционная и т.д."""
-    name = models.CharField(max_length=50, unique=True, verbose_name='Тип цены')
-    ms_uuid = models.SlugField(max_length=50, unique=True, verbose_name='Код')
+    name = models.CharField(max_length=255)
+    code = models.SlugField(max_length=50, unique=True)
+    ms_uuid = models.CharField(max_length=36, unique=True, null=True, blank=True)
     description = models.TextField(blank=True, verbose_name='Описание')
 
     class Meta:
