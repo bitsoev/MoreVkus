@@ -1,6 +1,6 @@
 from django.contrib import admin, messages
 from django.db import transaction
-from django.db.models import Sum
+from django.db.models import Sum, F
 from django.utils.html import format_html
 
 from .models import Orders, OrderItems, DeliveryAddress
@@ -88,11 +88,24 @@ class OrdersAdmin(admin.ModelAdmin):
     @transaction.atomic
     def confirm_orders(self, request, queryset):
         confirmed = 0
-        for order in queryset.prefetch_related('items__product'):
+        for order in queryset.prefetch_related('items__product', 'items__warehouse'):
             if order.status != 'new':
                 continue
             try:
-                order.update_stock_on_confirm()
+                # Списание остатков и пересчет stock_cache
+                for item in order.items.select_related('product', 'warehouse'):
+                    product = item.product
+                    stock = item.warehouse.stocks.select_for_update().filter(product=product).first()
+                    if not stock or stock.quantity < item.quantity:
+                        raise ValueError(f"Недостаточно остатков для {product.name}")
+                    stock.quantity = F('quantity') - item.quantity
+                    stock.save(update_fields=['quantity'])
+
+                    # Пересчет stock_cache
+                    total_stock = product.stocks.aggregate(total=Sum('quantity'))['total'] or 0
+                    product.stock_cache = total_stock
+                    product.save(update_fields=['stock_cache'])
+
                 order.status = 'confirmed'
                 order.save(update_fields=['status'])
                 confirmed += 1
@@ -114,15 +127,28 @@ class OrdersAdmin(admin.ModelAdmin):
         updated = queryset.filter(status='shipped').update(status='delivered')
         self.message_user(request, f"Отмечено {updated} заказ(ов) как доставленные", messages.SUCCESS)
 
-    @admin.action(description='❌ Отменить заказы и вернуть товары на склад')
+    @admin.action(description='❌ Отменить заказы')
     @transaction.atomic
     def cancel_orders(self, request, queryset):
         cancelled = 0
-        for order in queryset.prefetch_related('items__product'):
-            if order.status in ['cancelled', 'delivered']:
+        for order in queryset.prefetch_related('items__product', 'items__warehouse'):
+            if order.status in ['cancelled', 'delivered', 'completed']:
                 continue
             try:
-                order.restore_stock_on_cancel()
+                if order.status == 'confirmed':
+                    # Только для подтвержденных заказов возвращаем остатки
+                    for item in order.items.select_related('product', 'warehouse'):
+                        product = item.product
+                        stock = item.warehouse.stocks.select_for_update().filter(product=product).first()
+                        if stock:
+                            stock.quantity = F('quantity') + item.quantity
+                            stock.save(update_fields=['quantity'])
+
+                            # Пересчет stock_cache
+                            total_stock = product.stocks.aggregate(total=Sum('quantity'))['total'] or 0
+                            product.stock_cache = total_stock
+                            product.save(update_fields=['stock_cache'])
+
                 order.status = 'cancelled'
                 order.save(update_fields=['status'])
                 cancelled += 1

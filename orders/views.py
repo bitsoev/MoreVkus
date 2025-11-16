@@ -1,4 +1,5 @@
 from django.db import transaction
+from django.db.models import F, Sum
 from django.shortcuts import get_object_or_404
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
@@ -6,7 +7,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework import status, viewsets, generics, permissions
 
-from products.models import Product, Price
+from products.models import Product, Price, Stock
 from .models import Orders, OrderItems, DeliveryAddress
 from .permissions import IsOwnerOrAdmin
 from .serializers import OrdersSerializer
@@ -17,7 +18,7 @@ class OrderListView(generics.ListAPIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        return Orders.objects.filter(user=self.request.user).order_by('-created_dttm')
+        return Orders.objects.filter(user=self.request.user).order_by('-created_at')
 
 
 class OrderDetailView(generics.RetrieveAPIView):
@@ -41,9 +42,12 @@ class OrderViewSet(viewsets.ReadOnlyModelViewSet):
 
 class CreateOrderView(APIView):
     """
-    Создание нового заказа (используется мобильным приложением)
-    При создании — сразу списывает остатки со склада и пересчитывает кэш.
+    Создание нового заказа пользователем.
+    Никакого списания товара здесь НЕ происходит.
+    Только запись, валидация и проверка остатков.
+    Реальное списание происходит только при подтверждении заказа в админке.
     """
+
     permission_classes = [permissions.IsAuthenticated]
 
     @transaction.atomic
@@ -51,12 +55,12 @@ class CreateOrderView(APIView):
         data = request.data
         user = request.user
 
-        # === Проверка метода оплаты ===
+        # === Способ оплаты ===
         payment_method = data.get('payment_method', 'cash')
         if payment_method not in dict(Orders.PAYMENT_CHOICES):
             return Response({'error': 'Неверный метод оплаты'}, status=status.HTTP_400_BAD_REQUEST)
 
-        # === Определение адреса ===
+        # === Адрес ===
         address_id = data.get('address_id')
         address_data = data.get('address', {})
 
@@ -72,10 +76,10 @@ class CreateOrderView(APIView):
             user=user,
             address=address,
             payment_method=payment_method,
-            status='new'
+            status='new'   # товар НЕ списан
         )
 
-        # === Обработка позиций ===
+        # === Позиции ===
         items = data.get('items', [])
         if not items:
             return Response({'error': 'Пустой заказ'}, status=status.HTTP_400_BAD_REQUEST)
@@ -88,18 +92,17 @@ class CreateOrderView(APIView):
             quantity = int(item.get('quantity', 1))
             warehouse_id = item.get('warehouse_id')
 
-            # Проверяем существование продукта
             product = get_object_or_404(Product, id=product_id, is_active=True)
 
-            # Получаем цену — берём базовую (например, "Розничная")
+            # Цена
             price_obj = product.prices.first()
             if not price_obj:
                 return Response({'error': f'У товара "{product.name}" нет цены'}, status=status.HTTP_400_BAD_REQUEST)
 
             price = price_obj.value
 
-            # === Определяем склад ===
-            stock_qs = Stock.objects.select_for_update().filter(product=product)
+            # Проверка остатков, БЕЗ списания
+            stock_qs = Stock.objects.filter(product=product)
             if warehouse_id:
                 stock_qs = stock_qs.filter(warehouse_id=warehouse_id)
 
@@ -108,17 +111,8 @@ class CreateOrderView(APIView):
                 insufficient.append(product.name)
                 continue
 
-            # === Списание остатков ===
-            stock.quantity = F('quantity') - quantity
-            stock.save(update_fields=['quantity'])
-
-            # === Пересчёт кеша stock_cache ===
-            total_stock = product.stocks.aggregate(total=Sum('quantity'))['total'] or 0
-            product.stock_cache = total_stock
-            product.save(update_fields=['stock_cache'])
-
-            # === Создание позиции ===
             total_price = price * quantity
+
             OrderItems.objects.create(
                 order=order,
                 product=product,
@@ -127,9 +121,9 @@ class CreateOrderView(APIView):
                 quantity=quantity,
                 total_price=total_price
             )
+
             order_total += total_price
 
-        # === Проверяем, были ли пропущенные товары ===
         if insufficient:
             order.delete()
             return Response({
@@ -137,23 +131,21 @@ class CreateOrderView(APIView):
                 'details': insufficient
             }, status=status.HTTP_400_BAD_REQUEST)
 
-        # === Завершаем заказ ===
+        # Записываем сумму заказа
         order.order_sum = order_total
-        order.save(update_fields=['order_sum'])
+        order.save()
 
         return Response({
             'success': True,
             'order_id': order.id,
             'order_sum': float(order_total),
-            'status': order.status,
-            'message': 'Заказ успешно создан'
+            'status': order.status
         }, status=status.HTTP_201_CREATED)
 
 
 class OrderRepeatView(APIView):
     """
-    Повторение ранее созданного заказа пользователем.
-    Проверяет остатки и актуальные цены.
+    Повтор заказа: товаров НЕ списывает.
     """
     permission_classes = [permissions.IsAuthenticated]
 
@@ -206,8 +198,6 @@ class OrderRepeatView(APIView):
                 )
 
                 total += price * qty
-                product.stock_cache -= qty
-                product.save(update_fields=['stock_cache'])
 
             if not new_order.items.exists():
                 new_order.delete()
@@ -224,10 +214,11 @@ class OrderRepeatView(APIView):
                     "id": new_order.id,
                     "order_sum": float(total),
                     "skipped": skipped,
-                    "message": "Заказ успешно повторён.",
+                    "message": "Заказ успешно повторён."
                 },
                 status=status.HTTP_201_CREATED,
             )
+
 
 
 @api_view(['PATCH'])
@@ -235,8 +226,7 @@ class OrderRepeatView(APIView):
 @transaction.atomic
 def cancel_order(request, pk):
     """
-    Отменяет заказ и возвращает товары на склад.
-    Можно вызывать только для своих заказов, если они ещё не отменены/доставлены.
+    Отменяет заказ. Возврат остатков происходит ТОЛЬКО если заказ был подтверждён.
     """
     user = request.user
     order = get_object_or_404(Orders, id=pk)
@@ -248,33 +238,39 @@ def cancel_order(request, pk):
     # Проверяем статус
     if order.status == 'cancelled':
         return Response({'error': 'Заказ уже отменён'}, status=status.HTTP_400_BAD_REQUEST)
+
     if order.status in ['delivered', 'completed']:
         return Response({'error': 'Доставленные заказы нельзя отменить'}, status=status.HTTP_400_BAD_REQUEST)
 
-    # Возвращаем остатки
-    for item in order.items.select_related('product', 'warehouse'):
-        product = item.product
-        qty = item.quantity
+    # === Возврат остатков ТОЛЬКО если заказ был подтверждён ===
+    if order.status == 'confirmed':
 
-        stock = Stock.objects.select_for_update().filter(
-            product=product,
-            warehouse=item.warehouse
-        ).first()
+        for item in order.items.select_related('product', 'warehouse'):
+            product = item.product
+            qty = item.quantity
 
-        if stock:
-            stock.quantity = F('quantity') + qty
-            stock.save(update_fields=['quantity'])
+            stock = Stock.objects.select_for_update().filter(
+                product=product,
+                warehouse=item.warehouse
+            ).first()
 
-        # Пересчёт stock_cache
-        total = product.stocks.aggregate(total=Sum('quantity'))['total'] or 0
-        product.stock_cache = total
-        product.save(update_fields=['stock_cache'])
+            if stock:
+                stock.quantity = F('quantity') + qty
+                stock.save(update_fields=['quantity'])
 
-    # Обновляем заказ
+            # Пересчёт общего остатка
+            total = product.stocks.aggregate(total=Sum('quantity'))['total'] or 0
+            product.stock_cache = total
+            product.save(update_fields=['stock_cache'])
+
+    # Меняем статус
     order.status = 'cancelled'
     order.save(update_fields=['status'])
 
     return Response({
         'success': True,
-        'message': f'Заказ #{order.id} отменён, остатки возвращены на склад.'
+        'message': (
+            f'Заказ #{order.id} отменён.'
+            + (' Остатки возвращены на склад.' if order.status == "confirmed" else '')
+        )
     }, status=status.HTTP_200_OK)

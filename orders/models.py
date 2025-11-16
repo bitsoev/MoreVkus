@@ -9,6 +9,7 @@ from products.models import Product, Warehouse, Stock, Price
 
 
 class DeliveryAddress(models.Model):
+
     """Адрес доставки пользователя"""
     user = models.ForeignKey(
         User, on_delete=models.CASCADE, related_name='addresses', verbose_name='Пользователь'
@@ -16,6 +17,8 @@ class DeliveryAddress(models.Model):
     city = models.CharField(max_length=100, verbose_name='Город')
     street = models.CharField(max_length=255, verbose_name='Улица')
     house = models.CharField(max_length=20, verbose_name='Дом')
+    entrance = models.CharField(max_length=10, blank=True, null=True, verbose_name='Подъезд')
+    floor = models.CharField(max_length=10, blank=True, null=True, verbose_name='Этаж')
     apartment = models.CharField(max_length=20, blank=True, null=True, verbose_name='Квартира')
     comment = models.TextField(blank=True, null=True, verbose_name='Комментарий')
     created_at = models.DateTimeField(auto_now_add=True)
@@ -180,7 +183,7 @@ class OrderItems(models.Model):
         """Возвращает актуальную цену из таблицы Prices"""
         now = timezone.now()
         price_obj = (
-            Prices.objects.filter(
+            Price.objects.filter(
                 product=self.product,
                 start_date__lte=now
             )
