@@ -1,7 +1,9 @@
+from django.utils import timezone
 from django.utils.text import slugify
 from django.db import transaction
 from django.db.models import Sum
 import pandas as pd
+from django.db import models
 
 from rest_framework import viewsets, generics, status, filters
 from rest_framework.views import APIView
@@ -13,7 +15,9 @@ from rest_framework.decorators import action
 from django_filters.rest_framework import DjangoFilterBackend
 
 from .models import Product, ProductImage, Category, Tag, Unit, Warehouse, Stock, PriceType, Price
-from .serializers import ProductSerializer, CategorySerializer, ProductImageSerializer
+from .serializers import ProductSerializer, CategorySerializer, ProductImageSerializer, PriceTypeSerializer, \
+    ProductPriceSerializer
+
 
 class ProductImportView(APIView):
     parser_classes = [MultiPartParser, FormParser]
@@ -134,21 +138,81 @@ class ProductImportView(APIView):
 
 
 class ProductViewSet(viewsets.ReadOnlyModelViewSet):
-    queryset = Product.objects.filter(is_active=True).select_related('category', 'unit').prefetch_related('images', 'tags', 'prices__price_type')
+    queryset = Product.objects.filter(is_active=True).select_related(
+        'category', 'unit'
+    ).prefetch_related(
+        'images', 'tags', 'prices__price_type'
+    )
     serializer_class = ProductSerializer
     filter_backends = [DjangoFilterBackend, filters.OrderingFilter, filters.SearchFilter]
     filterset_fields = {
         'category__slug': ['exact'],
         'tags__slug': ['exact'],
-        'unit__code': ['exact']
+        'unit__code': ['exact'],
+        'prices__price_type__code': ['exact'],  # Фильтр по типу цены
     }
-    ordering_fields = ['weight', 'stock_cache']
+    ordering_fields = ['name', 'stock_cache', 'created_at']
     search_fields = ['name', 'description', 'sku']
+
+    @action(detail=True, methods=['get'])
+    def price_history(self, request, pk=None):
+        """Получить историю цен для товара"""
+        product = self.get_object()
+        prices = Price.objects.filter(
+            product=product
+        ).select_related('price_type').order_by('-start_date')
+
+        serializer = ProductPriceSerializer(prices, many=True)
+        return Response(serializer.data)
+
+    @action(detail=False, methods=['get'])
+    def with_price_type(self, request):
+        """Получить товары с конкретным типом цены"""
+        price_type_code = request.query_params.get('price_type')
+        if not price_type_code:
+            return Response(
+                {'error': 'price_type parameter is required'},
+                status=400
+            )
+
+        try:
+            price_type = PriceType.objects.get(code=price_type_code)
+        except PriceType.DoesNotExist:
+            return Response(
+                {'error': 'Price type not found'},
+                status=404
+            )
+
+        # Получаем товары с актуальной ценой указанного типа
+        now = timezone.now()
+        products_with_price = Product.objects.filter(
+            is_active=True,
+            prices__price_type=price_type,
+            prices__is_active=True,
+            prices__start_date__lte=now
+        ).filter(
+            models.Q(prices__end_date__isnull=True) |
+            models.Q(prices__end_date__gte=now)
+        ).distinct()
+
+        page = self.paginate_queryset(products_with_price)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+
+        serializer = self.get_serializer(products_with_price, many=True)
+        return Response(serializer.data)
 
 
 class CategoryViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = Category.objects.filter(is_active=True)
     serializer_class = CategorySerializer
+
+
+class PriceTypeViewSet(viewsets.ReadOnlyModelViewSet):
+    """API для типов цен"""
+    queryset = PriceType.objects.all()
+    serializer_class = PriceTypeSerializer
 
 
 class ProductImageViewSet(viewsets.ReadOnlyModelViewSet):
