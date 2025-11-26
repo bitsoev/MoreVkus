@@ -4,14 +4,15 @@ from django.utils.html import format_html
 from django.db.models import Sum
 from django.utils import timezone
 
-from import_export import resources, fields as imp_fields
 from import_export.admin import ImportExportModelAdmin
+from import_export import resources, fields as imp_fields
 from import_export.widgets import ForeignKeyWidget, ManyToManyWidget
 
 from .models import (
     Category, Tag, Unit, Product, ProductImage,
     Warehouse, Stock, PriceType, Price
 )
+from .admin_resources import ProductResource, StockResource, PriceResource
 
 
 # -------------------- Inlines --------------------
@@ -27,9 +28,9 @@ class PriceInline(admin.TabularInline):
 class StockInline(admin.TabularInline):
     model = Stock
     extra = 1
-    fields = ('warehouse', 'quantity', 'updated_at')
+    fields = ('warehouse', 'quantity', 'unit', 'updated_at')
     readonly_fields = ('updated_at',)
-    autocomplete_fields = ['warehouse']
+    autocomplete_fields = ['warehouse', 'unit']
 
 
 class ProductImageInline(admin.TabularInline):
@@ -45,80 +46,8 @@ class ProductImageInline(admin.TabularInline):
     image_preview.short_description = 'Превью'
 
 
-# -------------------- Product Import/Export --------------------
-
-class ProductResource(resources.ModelResource):
-    category = imp_fields.Field(
-        column_name='Категория',
-        attribute='category',
-        widget=ForeignKeyWidget(Category, 'name')
-    )
-    tags = imp_fields.Field(
-        column_name='Теги',
-        attribute='tags',
-        widget=ManyToManyWidget(Tag, field='name', separator=',')
-    )
-    unit = imp_fields.Field(
-        column_name='Единица',
-        attribute='unit',
-        widget=ForeignKeyWidget(Unit, 'code')
-    )
-    sku = imp_fields.Field(column_name='SKU', attribute='sku')
-    ms_uuid = imp_fields.Field(column_name='MS UUID', attribute='ms_uuid')
-    expiration_date = imp_fields.Field(column_name='Срок годности', attribute='expiration_date')
-    stock_quantity = imp_fields.Field(column_name='Количество', attribute='stock_quantity')
-
-    class Meta:
-        model = Product
-        fields = (
-            'id', 'sku', 'name', 'category', 'tags',
-            'unit', 'stock_cache', 'is_active', 'is_featured',
-            'origin', 'expiration_date', 'ms_uuid'
-        )
-        import_id_fields = ('sku',)
-        skip_unchanged = True
-        report_skipped = True
-
-    def dehydrate_tags(self, product):
-        return ', '.join(tag.name for tag in product.tags.all())
-
-    def before_import_row(self, row, **kwargs):
-        raw_cat = row.get('Категория') or ''
-        if raw_cat and not Category.objects.filter(name=raw_cat).exists():
-            Category.objects.get_or_create(name=raw_cat, defaults={'slug': slugify(raw_cat)})
-
-        raw_tags = row.get('Теги') or ''
-        if raw_tags:
-            tag_names = [t.strip() for t in raw_tags.split(',') if t.strip()]
-            for name in tag_names:
-                Tag.objects.get_or_create(name=name, defaults={'slug': slugify(name)})
-
-        raw_unit = row.get('Единица') or ''
-        if raw_unit and not Unit.objects.filter(code=raw_unit).exists():
-            Unit.objects.get_or_create(code=raw_unit, defaults={'name': raw_unit})
-
-    def after_save_instance(self, instance, new, **kwargs):
-        """После импорта создаёт/обновляет Stock для основного склада"""
-        from products.models import Warehouse, Stock
-        row = kwargs.get('row')
-        if not row:
-            return
-        quantity = row.get('Количество')
-        if not quantity:
-            return
-        try:
-            quantity = int(quantity)
-        except (ValueError, TypeError):
-            return
-        warehouse, _ = Warehouse.objects.get_or_create(name='Основной склад')
-        Stock.objects.update_or_create(
-            product=instance,
-            warehouse=warehouse,
-            defaults={'quantity': quantity}
-        )
-
-
 # -------------------- Product Admin --------------------
+
 @admin.register(Product)
 class ProductAdmin(ImportExportModelAdmin):
     resource_class = ProductResource
@@ -192,6 +121,7 @@ class TagAdmin(admin.ModelAdmin):
 
 @admin.register(Unit)
 class UnitAdmin(admin.ModelAdmin):
+    search_fields = ['name']
     list_display = ('code', 'name', 'ms_uuid')
 
 
@@ -202,10 +132,11 @@ class WarehouseAdmin(admin.ModelAdmin):
 
 
 @admin.register(Stock)
-class StockAdmin(admin.ModelAdmin):
-    list_display = ('product', 'warehouse', 'quantity', 'updated_at')
+class StockAdmin(ImportExportModelAdmin):
+    resource_class = StockResource
+    list_display = ('product', 'warehouse', 'quantity', 'unit', 'updated_at')
     list_filter = ('warehouse',)
-    search_fields = ('product__name',)
+    search_fields = ('product__name', 'warehouse__name')
 
 
 # -------------------- PriceType / Price Admin --------------------
@@ -217,7 +148,8 @@ class PriceTypeAdmin(admin.ModelAdmin):
 
 
 @admin.register(Price)
-class PriceAdmin(admin.ModelAdmin):
+class PriceAdmin(ImportExportModelAdmin):
+    resource_class = PriceResource
     list_display = (
         'product_link', 'price_type', 'value_display',
         'is_active_colored', 'start_date', 'end_date', 'priority', 'updated_at'

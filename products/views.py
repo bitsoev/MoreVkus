@@ -22,119 +22,222 @@ from .serializers import ProductSerializer, CategorySerializer, ProductImageSeri
 class ProductImportView(APIView):
     parser_classes = [MultiPartParser, FormParser]
     permission_classes = [IsAdminUser]
+
     BASE_PRICE_TYPE_CODE = "base"
 
-    def post(self, request, *args, **kwargs):
-        file = request.FILES.get('file')
+    # -------------------------------------------------------
+    # 🔹 Чтение файла (xlsx/csv/json)
+    # -------------------------------------------------------
+    def parse_file(self, file):
+        try:
+            if file.name.endswith(".json"):
+                return pd.DataFrame(pd.read_json(file))
+            try:
+                return pd.read_excel(file)
+            except Exception:
+                return pd.read_csv(file)
+        except Exception as e:
+            raise ValueError(f"Ошибка чтения файла: {e}")
+
+    # -------------------------------------------------------
+    # 🔹 Сам импорт
+    # -------------------------------------------------------
+    def post(self, request):
+        file = request.FILES.get("file")
         if not file:
-            return Response({'detail': 'Файл не передан'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"detail": "Файл не передан"}, status=400)
 
         try:
-            df = pd.read_excel(file)
-        except Exception:
-            try:
-                df = pd.read_csv(file)
-            except Exception as e:
-                return Response({'detail': f'Не удалось прочитать файл: {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
+            df = self.parse_file(file)
+        except ValueError as e:
+            return Response({"detail": str(e)}, status=400)
 
-        base_price_type, _ = PriceType.objects.get_or_create(code=self.BASE_PRICE_TYPE_CODE, defaults={'name': 'Базовая цена'})
-
-        created = 0
-        updated = 0
+        created, updated = 0, 0
         errors = []
+
+        base_price_type, _ = PriceType.objects.get_or_create(
+            code=self.BASE_PRICE_TYPE_CODE,
+            defaults={"name": "Базовая цена"}
+        )
 
         for idx, row in df.iterrows():
             try:
                 with transaction.atomic():
-                    # Категория
-                    cat_name = row.get('Категория') or row.get('category') or ''
+                    # ---------------------------------------------------
+                    # 🔸 Категория
+                    # ---------------------------------------------------
+                    category_name = row.get("Категория")
                     category = None
-                    if cat_name and not pd.isna(cat_name):
+                    if category_name:
                         category, _ = Category.objects.get_or_create(
-                            name=str(cat_name).strip(),
-                            defaults={'slug': slugify(str(cat_name))}
+                            name=str(category_name).strip(),
+                            defaults={"slug": slugify(category_name)}
                         )
 
-                    # Теги
+                    # ---------------------------------------------------
+                    # 🔸 Теги
+                    # ---------------------------------------------------
+                    tags_raw = row.get("Теги")
                     tags_list = []
-                    raw_tags = row.get('Теги') or row.get('tags') or ''
-                    if raw_tags and not pd.isna(raw_tags):
-                        tag_names = [t.strip() for t in str(raw_tags).split(',') if t.strip()]
-                        for tname in tag_names:
-                            tag, _ = Tag.objects.get_or_create(name=tname, defaults={'slug': slugify(tname)})
+                    if tags_raw:
+                        for tag_name in str(tags_raw).split(","):
+                            tag_name = tag_name.strip()
+                            if not tag_name:
+                                continue
+                            tag, _ = Tag.objects.get_or_create(
+                                name=tag_name,
+                                defaults={"slug": slugify(tag_name)}
+                            )
                             tags_list.append(tag)
 
-                    # Unit
-                    unit_code = row.get('Единица') or row.get('unit') or 'pcs'
-                    unit_obj, _ = Unit.objects.get_or_create(code=str(unit_code).strip(), defaults={'name': str(unit_code)})
+                    # ---------------------------------------------------
+                    # 🔸 Единица измерения
+                    # ---------------------------------------------------
+                    unit_code = row.get("Единица") or "pcs"
+                    unit, _ = Unit.objects.get_or_create(
+                        code=str(unit_code).strip(),
+                        defaults={"name": str(unit_code)}
+                    )
 
-                    # SKU
-                    sku = row.get('SKU') or row.get('sku')
-                    sku = None if (pd.isna(sku) or sku is None) else str(sku).strip()
+                    # ---------------------------------------------------
+                    # 🔸 SKU
+                    # ---------------------------------------------------
+                    raw_sku = row.get("SKU")
+                    sku = str(raw_sku).strip() if raw_sku else str(uuid.uuid4())
 
-                    # fields
-                    name = row.get('Название') or row.get('name') or 'Без названия'
-                    description = row.get('Описание') or row.get('description') or ''
-                    weight = int(row.get('Вес') or 0)
-                    stock_val = int(row.get('Остаток') or 0)
-                    is_active = bool(row.get('Активен')) if 'Активен' in row else True
-                    origin = row.get('Происхождение') or ''
-                    ms_uuid = row.get('MS UUID') or None
+                    # ---------------------------------------------------
+                    # 🔸 Поля товара
+                    # ---------------------------------------------------
+                    name = row.get("Название") or "Без названия"
+                    description = row.get("Описание") or ""
+                    weight = int(row.get("Вес") or 0)
+                    active = row.get("Активен")
+                    is_active = bool(active) if active in [0, 1, True, False] else True
 
-                    exp_raw = row.get('Срок годности') or row.get('expiration_date')
+                    origin = row.get("Происхождение") or ""
+
+                    exp_raw = row.get("Срок годности")
                     expiration_date = None
-                    if exp_raw and not pd.isna(exp_raw):
+                    if exp_raw:
                         try:
                             expiration_date = pd.to_datetime(exp_raw).date()
-                        except Exception:
-                            expiration_date = None
+                        except:
+                            pass
 
-                    defaults = {
-                        'name': str(name).strip(),
-                        'description': str(description),
-                        'category': category,
-                        'unit': unit_obj,
-                        'weight': weight,
-                        'stock_cache': stock_val,
-                        'is_active': is_active,
-                        'origin': origin,
-                        'expiration_date': expiration_date,
-                        'ms_uuid': None if (ms_uuid is None or pd.isna(ms_uuid)) else str(ms_uuid)
+                    product_defaults = {
+                        "name": name,
+                        "slug": slugify(name)[:50],
+                        "description": description,
+                        "category": category,
+                        "unit": unit,
+                        "weight": weight,
+                        "is_active": is_active,
+                        "origin": origin,
+                        "expiration_date": expiration_date,
                     }
 
-                    if sku:
-                        obj, created_flag = Product.objects.update_or_create(sku=sku, defaults=defaults)
-                    else:
-                        obj = Product.objects.create(**defaults, sku=str(uuid.uuid4()))
-                        created_flag = True
+                    obj, created_flag = Product.objects.update_or_create(
+                        sku=sku, defaults=product_defaults
+                    )
 
-                    # tags
+                    # Теги
                     if tags_list:
                         obj.tags.set(tags_list)
 
-                    # price
-                    raw_price = row.get('Цена') or row.get('price')
-                    if raw_price and not pd.isna(raw_price):
-                        Price.objects.update_or_create(product=obj, price_type=base_price_type, defaults={'value': raw_price, 'start_date': timezone.now(), 'is_active': True})
+                    # ---------------------------------------------------
+                    # 🔸 Цена
+                    # ---------------------------------------------------
+                    price_value = row.get("Цена (базовая)")
+                    if price_value:
+                        Price.objects.update_or_create(
+                            product=obj,
+                            price_type=base_price_type,
+                            defaults={
+                                "value": price_value,
+                                "start_date": timezone.now(),
+                                "is_active": True,
+                            },
+                        )
 
-                    # warehouse + stock
-                    warehouse_name = row.get('Склад') or row.get('Warehouse') or None
-                    if warehouse_name and not pd.isna(warehouse_name):
-                        wh, _ = Warehouse.objects.get_or_create(name=str(warehouse_name).strip())
-                        Stock.objects.update_or_create(product=obj, warehouse=wh, defaults={'quantity': stock_val})
-                        total = obj.stocks.aggregate(total=Sum('quantity'))['total'] or 0
-                        obj.stock_cache = total
-                        obj.save(update_fields=['stock_cache'])
+                    # ---------------------------------------------------
+                    # 🔸 Остатки
+                    # ---------------------------------------------------
+                    wh_name = row.get("Склад")
+                    stock_qty = row.get("Остаток")
 
-                    if created_flag:
-                        created += 1
-                    else:
-                        updated += 1
+                    if wh_name and stock_qty is not None:
+                        wh, _ = Warehouse.objects.get_or_create(name=str(wh_name).strip())
+
+                        Stock.objects.update_or_create(
+                            product=obj,
+                            warehouse=wh,
+                            defaults={"quantity": int(stock_qty), "unit": unit},
+                        )
+
+                        obj.stock_cache = obj.stocks.aggregate(total=Sum("quantity"))["total"] or 0
+                        obj.save()
+
+                    created += created_flag
+                    updated += (not created_flag)
 
             except Exception as e:
-                errors.append({'row': int(idx), 'error': str(e)})
+                errors.append({"row": int(idx), "error": str(e)})
 
-        return Response({'created': created, 'updated': updated, 'errors': errors})
+        return Response(
+            {"created": created, "updated": updated, "errors": errors},
+            status=200
+        )
+
+
+class ProductExportView(APIView):
+    permission_classes = [IsAdminUser]
+
+    def get(self, request):
+        data = []
+
+        products = Product.objects.select_related(
+            "category", "unit"
+        ).prefetch_related(
+            "tags", "prices", "stocks", "images"
+        )
+
+        for p in products:
+            prices = [{
+                "type": price.price_type.code,
+                "value": str(price.value),
+                "start_date": price.start_date,
+                "end_date": price.end_date,
+                "is_active": price.is_active,
+            } for price in p.prices.all()]
+
+            stocks = [{
+                "warehouse": s.warehouse.name,
+                "quantity": s.quantity
+            } for s in p.stocks.all()]
+
+            images = [{
+                "url": request.build_absolute_uri(img.image.url),
+                "is_main": img.is_main
+            } for img in p.images.all()]
+
+            data.append({
+                "sku": p.sku,
+                "name": p.name,
+                "description": p.description,
+                "category": p.category.name if p.category else None,
+                "tags": [t.name for t in p.tags.all()],
+                "unit": p.unit.code,
+                "origin": p.origin,
+                "expiration_date": p.expiration_date,
+                "is_active": p.is_active,
+                "stock_cache": p.stock_cache,
+
+                "prices": prices,
+                "stocks": stocks,
+                "images": images,
+            })
+
+        return Response(data)
 
 
 class ProductViewSet(viewsets.ReadOnlyModelViewSet):
