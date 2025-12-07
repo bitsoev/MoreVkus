@@ -201,3 +201,4 @@ class Price(models.Model):
             qs = qs.filter(price_type=price_type)
 
         return qs.order_by('-priority', '-start_date').first()
+    
