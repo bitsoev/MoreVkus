@@ -35,13 +35,13 @@ class Unit(models.Model):
 
 class Product(models.Model):
     name = models.CharField(max_length=255)
-    slug = models.SlugField(unique=True)
+    slug = models.SlugField(max_length=255, unique=True)
     description = models.TextField(blank=True)
 
     category = models.ForeignKey('products.Category', on_delete=models.CASCADE, related_name='products')
     tags = models.ManyToManyField('products.Tag', blank=True)
 
-    sku = models.CharField(max_length=150, unique=True, default=uuid.uuid4)
+    sku = models.CharField(max_length=255, unique=True, default=uuid.uuid4)
 
     unit = models.ForeignKey('products.Unit', on_delete=models.PROTECT, default=1)
 
