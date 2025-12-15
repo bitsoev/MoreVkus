@@ -41,7 +41,7 @@ class Product(models.Model):
     category = models.ForeignKey('products.Category', on_delete=models.CASCADE, related_name='products')
     tags = models.ManyToManyField('products.Tag', blank=True)
 
-    sku = models.CharField(max_length=50, unique=True, default=uuid.uuid4)
+    sku = models.CharField(max_length=150, unique=True, default=uuid.uuid4)
 
     unit = models.ForeignKey('products.Unit', on_delete=models.PROTECT, default=1)
 
